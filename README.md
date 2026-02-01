@@ -11,7 +11,9 @@ A Python script to automate the analysis of molecular dynamics simulations (GROM
   - **Atom Distances:** Monitors catalytic distances over time.
   - **Radius of Gyration:** Measures ligand compactness.
 
-## 🛠️ Dependencies
+## Dependencies
 Ensure you have the following Python libraries installed:
+
 ```bash
 pip install MDAnalysis pandas matplotlib
+```
