@@ -13,9 +13,9 @@ STOP_FRAME = None
 # the protein key is used to select residues in all monomers
 # the protein is parsed into different monomers automatically
 PROTEIN_KEY = "resid 1-50"
-PROTEIN_FITTING_CRITERIA = "backbone"
+PROTEIN_FITTING_CRITERIA = "name CA"
 
-# if more ligands are needed, add them using the reffered notation
+# if more ligands are needed, add them using the referred notation
 # specific atom IDs can selected for the ligands 
 LIGANDS_KEYS = ["resname SAM", "resname NAS"]
 LIGAND_FITTING_CRITERIA = "all" # "not name H*" to exclude ligand hydrogens
@@ -137,7 +137,7 @@ def compute_RMSD_fit_protein(u, full_dict, complex_id, ligand_names, protein_fc,
     r = rms.RMSD(complex_atom_group, complex_atom_group, select = protein_fc, groupselections = complex_keys_list)
     r.run(start = first_frame, stop = final_frame)
 
-    run_df = pd.DataFrame(r.results.rmsd, columns = ["Frame", "Time(ns)", "Backbone", protein_fc] +  ligand_names)
+    run_df = pd.DataFrame(r.results.rmsd, columns = ["Frame", "Time(ns)", "Backbone (discarded)", protein_fc] +  ligand_names)
     
     export_name = f"RMSD_Protein_complex_{complex_id}_fitted_plus_{'_'.join(ligand_names)}"
     export_csv_plot(export_name, run_df, labels = ["Frames", "Distance (Å)"])
@@ -167,7 +167,7 @@ def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names, ligand_fc, m
         ligand_atom_ids = full_dict[complex_id]["ligands"][ligand]
 
         if len(ligand_atom_ids) < 3:
-            print(f"{ligand} is composed of {len(ligand_atom_ids)} atoms, so it does not have self fitted RMSD values.")
+            print(f"{ligand} is composed of {len(ligand_atom_ids)} atoms, so it does not have self fitted RMSD values.", "\n")
             continue
 
         ligand_atom_group = u.atoms[ligand_atom_ids]
@@ -252,7 +252,7 @@ def analyse_rgyr(u, full_dict, complex_id, ligand_names, min_frame = 0, max_fram
         
         export_name = f"Rgyr_{ligand}_complex_{complex_id}"        
         export_csv_plot(export_name, rgyr_df,labels = ["Frames", "Distance (Å)"], ind_start=2)
-        return "Radius of gyration analysis sucessfully generated. \n"
+    return "Radius of gyration analysis sucessfully generated. \n"
 
 
 def export_csv_plot(file_export_name, df, labels = None, ind_start = 3):
@@ -370,7 +370,7 @@ def main():
             }
             current_function = functions_dict[function_name]
             current_input = inputs_dict[function_name]
-            current_function(*current_input)
+            print(current_function(*current_input))
             if function_name in RUN_ONCE:
                 break
 
