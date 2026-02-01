@@ -1,6 +1,6 @@
 import MDAnalysis as mda
 from MDAnalysis.analysis import rms
-from MDAnalysis.analysis import distances
+from MDAnalysis.lib.distances import calc_bonds
 import sys
 import pandas as pd
 from matplotlib import pyplot as plt
@@ -11,17 +11,17 @@ STOP_TIME = 50
 # the protein key is used to select residues in all monomers
 # the protein is parsed into different monomers automatically
 PROTEIN_KEY = "resid 1-50"
-PROTEIN_FITTING_CRITERIA = "name CA"
+PROTEIN_FITTING_CRITERIA = "backbone"
 
 # if more ligands are needed, add them using the reffered notation
 # specific atom IDs can selected for the ligands 
 LIGANDS_KEYS = ["resname SAM", "resname NAS"]
-LIGAND_FITTING_CRITERIA = "not name H*"
+LIGAND_FITTING_CRITERIA = "all" # "not name H*" to exclude ligand hydrogens
 
 #atom pair indices
 ATOM_PAIRS = [(49, 50), (99, 100), (101, 103)]
 
-FUNCTIONS = ["Distance between atoms"]
+FUNCTIONS = ["Distance between atoms", "RMSD fitted protein", "RMSD fitted ligands" , "RMSD fitted protein"]
 #FUNCTIONS = ["RMSD fitted ligands", "RMSD fitted protein"]
 
 """
@@ -124,7 +124,7 @@ def add_ligands_to_complexes(u, complexes_dict, ligand_key_list):
         
     return final_dict
 
-def compute_RMSD_fit_protein(u, full_dict, complex_id, ligand_names):
+def compute_RMSD_fit_protein(u, full_dict, complex_id, ligand_names, protein_fc):
     """
     Computes the RMSD of a inputed complex with fitting on the complex protein_chain, from a universe and a dictionary of all atoms in the system
     from MDAnalysis.analysis import rms
@@ -132,21 +132,22 @@ def compute_RMSD_fit_protein(u, full_dict, complex_id, ligand_names):
     :param full_dict: disctionary containing atom ids, separated into complexes. Each complex contains \
     the specific monomer and ligands atoms.
     :param complex_n: the identifier of a complex
+    :param protein_fc: the protein fitting criteria used to calculate RMSD values
     """
     export_name = f"RMSD_Protein_fitted_plus_{'_'.join(ligand_names)}"
     complex_atom_group, complex_keys_list = get_complex_data(u, full_dict, complex_id)
 
-    r = rms.RMSD(complex_atom_group, complex_atom_group, select = PROTEIN_FITTING_CRITERIA, groupselections = complex_keys_list)
+    r = rms.RMSD(complex_atom_group, complex_atom_group, select = protein_fc, groupselections = complex_keys_list)
     r.run()
 
-    run_df = pd.DataFrame(r.results.rmsd, columns = ["Frame", "Time(ns)", "Backbone", "Alpha Carbons"] +  ligand_names)
+    run_df = pd.DataFrame(r.results.rmsd, columns = ["Frame", "Time(ns)", "Backbone", protein_fc] +  ligand_names)
     
     export_csv_plot(export_name, run_df)
 
     return "Protein fitted RMSD successfuly generated. \n"
 
 
-def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names ):
+def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names, ligand_fc):
     """
     Computes the RMSD of a inputed complex with fitting on the ligand, from a universe and a dictionary of all atoms in the system
     
@@ -154,6 +155,7 @@ def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names ):
     :param full_dict: disctionary containing atom ids, separated into complexes. Each complex contains \
     the specific monomer and ligands atoms.
     :param complex_n: the identifier of a complex
+    :param ligand_fc: the ligand fitting criteria used to calculate RMSD values
     """
 
     for ligand in ligand_names:
@@ -162,12 +164,13 @@ def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names ):
         ligand_atom_ids = full_dict[complex_id]["ligands"][ligand]
 
         if len(ligand_atom_ids) < 3:
-            return f"{ligand} is composed of {len(ligand_atom_ids)} atoms, so it does not have self fitted RMSD values."
+            print(f"{ligand} is composed of {len(ligand_atom_ids)} atoms, so it does not have self fitted RMSD values.")
+            continue
         else:
             use_superposition = True
 
         ligand_atom_group = u.atoms[ligand_atom_ids]
-        r = rms.RMSD(ligand_atom_group, ligand_atom_group, select = LIGAND_FITTING_CRITERIA, superposition = use_superposition)
+        r = rms.RMSD(ligand_atom_group, ligand_atom_group, select = ligand_fc, superposition = use_superposition)
         r.run()
 
         run_df = pd.DataFrame(r.results.rmsd, columns = ["Frame", "Time(ns)"] +  [ligand])
@@ -191,13 +194,13 @@ def compute_atom_distance(u, atoms_ids_listoftuples, max_st):
         group_1_ids.append(pair[0]-1)
         group_2_ids.append(pair[1]-1)
         column_names.append(f"{pair[0]} / {pair[1]}")
-    atom_1_group = u.select_atoms(ids_to_key(group_1_ids))
-    atom_2_group = u.select_atoms(ids_to_key(group_2_ids))
+    atom_1_group = u.atoms[group_1_ids]
+    atom_2_group = u.atoms[group_2_ids]
 
     dist_data = []
     for ts in u.trajectory:
         frame = ts.frame
-        _, _, atom_distance = distances.dist(atom_1_group, atom_2_group)
+        atom_distance = calc_bonds(atom_1_group.positions, atom_2_group.positions, box=u.dimensions)
         atom_distance_list = [float(atom_distance[i]) for i in range(len(atom_distance))]
         dist_data.append([frame, u.trajectory.time] + atom_distance_list)
         if frame == max_st:
@@ -206,22 +209,24 @@ def compute_atom_distance(u, atoms_ids_listoftuples, max_st):
     dist_df = pd.DataFrame(dist_data, columns = ["Frame", "Time"] + column_names)
 
     export_name = "atom_pair_distances"
-    export_csv_plot(export_name, dist_df, labels = ["Frames", "Distance (Å)"])
+    export_csv_plot(export_name, dist_df, labels = ["Frames", "Distance (Å)"], ind_start= 2)
     return "Atom distances successfully generated. \n"
 
 
 
-def export_csv_plot(file_export_name, df, labels = None):
+def export_csv_plot(file_export_name, df, labels = None, ind_start = 3):
     """
     Exports a pandas dataframe as a .csv and a .png (image) files.
     
     :param file_export_name: export name for the .csv and .png files
     :param df: dataframe to be converted
     :param df: list containing optional x and y labels
+    :param ind_start: optional input for starting index for y axis values, retrieved \
+    from the dataframe colnames 
     """
     colnames = list(df)
     x_axis = colnames[0]
-    y_axis = colnames[2:]
+    y_axis = colnames[ind_start:]
     df.to_csv(f"{file_export_name}.csv", index = False)
     df.plot(x = x_axis, y = y_axis)
     plt.legend()
@@ -283,7 +288,10 @@ def get_complex_data(u, full_dict, complex_id):
 
 
 def main():
+    # defines what functions must only run once per command
     RUN_ONCE = ["Distance between atoms"]
+    list(set(FUNCTIONS))
+
 
     #create universe
     U = mda.Universe(sys.argv[1],sys.argv[2])
@@ -297,18 +305,19 @@ def main():
 
     #compute the RMSD for each complex
     #all functions besides atom distance are run for each complex
-    ligand_names = list(full_dict["1"]["ligands"].keys())
+    
 
-    functions_dict = {"RMSD fitted ligands": compute_RMSD_fit_protein ,
-                      "RMSD fitted protein": compute_RMSD_fit_ligand ,
+    functions_dict = {"RMSD fitted protein": compute_RMSD_fit_protein ,
+                      "RMSD fitted ligands": compute_RMSD_fit_ligand ,
                       "Distance between atoms": compute_atom_distance
     }
 
     for function_name in FUNCTIONS:
         for complex_id in list(full_dict.keys()):
+            ligand_names = list(full_dict[complex_id]["ligands"].keys())
 
-            inputs_dict = {"RMSD fitted ligands": (U, full_dict, complex_id, ligand_names),
-                           "RMSD fitted protein": (U, full_dict, complex_id, ligand_names),
+            inputs_dict = {"RMSD fitted ligands": (U, full_dict, complex_id, ligand_names, LIGAND_FITTING_CRITERIA),
+                           "RMSD fitted protein": (U, full_dict, complex_id, ligand_names, PROTEIN_FITTING_CRITERIA),
                            "Distance between atoms": (U, ATOM_PAIRS, STOP_TIME)
             }
             current_function = functions_dict[function_name]
