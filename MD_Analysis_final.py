@@ -5,8 +5,10 @@ import sys
 import pandas as pd
 from matplotlib import pyplot as plt
 
-START_TIME = 0
-STOP_TIME = 50
+#start and stop frames for the analysis functions
+#for default values substitute with None
+START_FRAME = None
+STOP_FRAME = None
 
 # the protein key is used to select residues in all monomers
 # the protein is parsed into different monomers automatically
@@ -19,14 +21,16 @@ LIGANDS_KEYS = ["resname SAM", "resname NAS"]
 LIGAND_FITTING_CRITERIA = "all" # "not name H*" to exclude ligand hydrogens
 
 #atom pair indices
+#for atom distance analysis
 ATOM_PAIRS = [(49, 50), (99, 100), (101, 103)]
 
-FUNCTIONS = ["Distance between atoms", "RMSD fitted protein", "RMSD fitted ligands" , "RMSD fitted protein"]
-#FUNCTIONS = ["RMSD fitted ligands", "RMSD fitted protein"]
+
+#write the functions you want to use
+FUNCTIONS = ["Distance between atoms", "Radius of gyration", "RMSD fitted protein", "RMSD fitted ligands"]
 
 """
-Choose functions from function selection pool. Functions are applied from left to right
-function options:
+Choose functions from function selection pool.
+Functions are applied from left to right function options:
 
 RMSD fitted ligands - calculates the RMSD over all frames for each inputed ligand,
 fitted for each ligand
@@ -36,26 +40,10 @@ the ligands, fitted for the inputted protein backbone
 
 Distance between atoms - calculates the distance between 2 atoms over all frames
 -> for more that an atom pair, input as a list of tuples: [(A1, A2), (A3, A4)]
+
+Radius of gyration - calculates the radius of gyration (rgyr) over all frames
+for each inputed ligand
 """
-
-def analyse_rgyr(u, atom_list, max):
-    """
-    Computes the gyration radius for each corresponding frame and simulation time. The outputted values are dependent on the inputed step
-    """
-    u.trajectory[0].frame
-    reduced_step = range(0,len(u.trajectory)+1)
-    rgyr_data = []
-    for ts in reduced_step:
-        frame = ts.frame
-        rgyr_data.append((u.trajectory.time, atom_list.radius_of_gyration()))
-        if frame == max:
-            break
-    u.trajectory[0]
-
-    export_name = "rgyr_analysis"
-    rgyt_df = pd.DataFrame(rgyr_data, collumns = ["Frame", "Time", "Rgyr"])
-    export_csv_plot(export_name, rgyr_data)
-    return "Radius of gyration analysis sucessfully generated. \n"
 
 
 def parse_protein(atom_list):
@@ -87,104 +75,123 @@ def parse_protein(atom_list):
 
     return complexes
 
+
 def add_ligands_to_complexes(u, complexes_dict, ligand_key_list):
     """
-    Adds the ligands of each chain complex in the system to a pre-existing complexes-dict
+    Adds the ligands of each chain complex in the system to a pre-existing complexes dict
+    For instance with 2 complexes and 4 ligands:
+    (ligand 1 -> complex 1)
+    (ligand 2 -> complex 2) 
+    (ligand 3 -> complex 1)
+    (ligand 4 -> complex 2)
     
-    :param u: universe
-    :param complexes_dict: a complexes dictionaty that contains protein chains for each chain complex
-    :param first_lai: the first atom id of the first appearing ligand in the topology file
+    :param u: Universe
+    :param complexes_dict: Complexes dictionary that contains protein chains for each chain complex
+    :param ligand_key_list: List contaning ligand keys. Ex: "resname SAM"
     """
     final_dict = complexes_dict.copy()
+    all_complex_keys = list(final_dict.keys())
+    n_complexes = len(all_complex_keys)
 
     for ligand_key in ligand_key_list:
-        ligand_atom_group = u.select_atoms(ligand_key)
-        current_resid = ligand_atom_group[0].resid
-        ligand_name = ligand_atom_group[0].resname
-        current_complex = 1
+        ligand_residues = u.select_atoms(ligand_key).residues
+        
+        for i, ligand_res in enumerate(ligand_residues):
 
-        for atom_info in ligand_atom_group:
-            current_index = int(atom_info.index)
+            ligand_name = ligand_res.resname
+            ligand_res_atom_ids = ligand_res.atoms.indices.tolist()
+            #distributes the according to the total number of complexes
+            #complex names start on 1
+            correct_target_id = i % n_complexes
+            correct_complex_key = all_complex_keys[correct_target_id]
 
-            if atom_info.resid > current_resid:
-                current_complex += 1
-                current_resid = atom_info.resid
 
-            if "ligands" not in final_dict[f"{current_complex}"]:
-                final_dict[f"{current_complex}"]["ligands"] = {}
-                final_dict[f"{current_complex}"]["ligands"][ligand_name] = [current_index]
+            if "ligands" not in final_dict[correct_complex_key]:
+                final_dict[correct_complex_key]["ligands"] = {}
+            
+            if ligand_name not in final_dict[correct_complex_key]["ligands"]:
+                final_dict[correct_complex_key]["ligands"][ligand_name] = []
 
-            elif ligand_name not in final_dict[f"{current_complex}"]["ligands"]:
-                final_dict[f"{current_complex}"]["ligands"][ligand_name] = [current_index]
-
-            else:
-                final_dict[f"{current_complex}"]["ligands"][ligand_name].append(current_index)
-
-        current_complex = 1
+            final_dict[correct_complex_key]["ligands"][ligand_name].extend(ligand_res_atom_ids)
         
     return final_dict
 
-def compute_RMSD_fit_protein(u, full_dict, complex_id, ligand_names, protein_fc):
+
+def compute_RMSD_fit_protein(u, full_dict, complex_id, ligand_names, protein_fc, min_frame = 0, max_frame = None):
     """
     Computes the RMSD of a inputed complex with fitting on the complex protein_chain, from a universe and a dictionary of all atoms in the system
-    from MDAnalysis.analysis import rms
+ 
     :param u: Universe
-    :param full_dict: disctionary containing atom ids, separated into complexes. Each complex contains \
+    :param full_dict: Dictionary containing atom ids, separated into complexes. Each complex contains \
     the specific monomer and ligands atoms.
-    :param complex_n: the identifier of a complex
-    :param protein_fc: the protein fitting criteria used to calculate RMSD values
+    :param complex_n: Identifier of a complex
+    :param protein_fc: The protein fitting criteria used to calculate RMSD values
+    :min_frame: Starting frame for the analysis
+    :max_frame: Ending frame for the analysis
     """
-    export_name = f"RMSD_Protein_fitted_plus_{'_'.join(ligand_names)}"
+    first_frame = min_frame
+    final_frame = max_frame or len(u.trajectory)
+    
     complex_atom_group, complex_keys_list = get_complex_data(u, full_dict, complex_id)
 
     r = rms.RMSD(complex_atom_group, complex_atom_group, select = protein_fc, groupselections = complex_keys_list)
-    r.run()
+    r.run(start = first_frame, stop = final_frame)
 
     run_df = pd.DataFrame(r.results.rmsd, columns = ["Frame", "Time(ns)", "Backbone", protein_fc] +  ligand_names)
     
-    export_csv_plot(export_name, run_df)
+    export_name = f"RMSD_Protein_complex_{complex_id}_fitted_plus_{'_'.join(ligand_names)}"
+    export_csv_plot(export_name, run_df, labels = ["Frames", "Distance (Å)"])
 
     return "Protein fitted RMSD successfuly generated. \n"
 
 
-def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names, ligand_fc):
+def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names, ligand_fc, min_frame = 0, max_frame = None):
     """
     Computes the RMSD of a inputed complex with fitting on the ligand, from a universe and a dictionary of all atoms in the system
     
     :param u: Universe
-    :param full_dict: disctionary containing atom ids, separated into complexes. Each complex contains \
+    :param full_dict: Dictionary containing atom ids, separated into complexes. Each complex contains \
     the specific monomer and ligands atoms.
-    :param complex_n: the identifier of a complex
-    :param ligand_fc: the ligand fitting criteria used to calculate RMSD values
+    :param complex_id: Identifier of a complex
+    :param ligand_names: List containing the ligand names that are to be analysed
+    :param ligand_fc: The ligand fitting criteria used to calculate RMSD values
+    :min_frame: Starting frame for the analysis
+    :max_frame: Ending frame for the analysis
     """
 
+    first_frame = min_frame
+    final_frame = max_frame or len(u.trajectory)
+
     for ligand in ligand_names:
-        export_name = f"RMSD_{ligand}_fitted"
         
         ligand_atom_ids = full_dict[complex_id]["ligands"][ligand]
 
         if len(ligand_atom_ids) < 3:
             print(f"{ligand} is composed of {len(ligand_atom_ids)} atoms, so it does not have self fitted RMSD values.")
             continue
-        else:
-            use_superposition = True
 
         ligand_atom_group = u.atoms[ligand_atom_ids]
-        r = rms.RMSD(ligand_atom_group, ligand_atom_group, select = ligand_fc, superposition = use_superposition)
-        r.run()
-
+        r = rms.RMSD(ligand_atom_group, ligand_atom_group, select = ligand_fc)
+        r.run(start = first_frame, stop = final_frame)
+      
         run_df = pd.DataFrame(r.results.rmsd, columns = ["Frame", "Time(ns)"] +  [ligand])
+        
+        export_name = f"RMSD_{ligand}_complex_{complex_id}_fitted"
         print(run_df, "\n")
-        export_csv_plot(export_name, run_df)
+        export_csv_plot(export_name, run_df, labels = ["Frames", "Distance (Å)"])
 
     return "Ligand fitted RMSD successfuly generated. \n"
 
-def compute_atom_distance(u, atoms_ids_listoftuples, max_st):
+
+def compute_atom_distance(u, atoms_ids_listoftuples, min_frame = 0, max_frame = None):
     """
-    Docstring for atom_distances_analysis
-    
-    :param u: Description
-    :param atoms_ids_listoftuples: Description
+    Calculates and plots the difference between atom pairs. Accepts the a list of tuples as input for the atom pairs and \
+    can calculate the distance for however many atom pairs are included.  
+
+    :param u: Universe
+    :param atoms_ids_listoftuples: List of tuples containing the atom pairs. Ex: [(atom_1_from_pair_A, atom_2_from_pair_A), (atom_1_from_pair_B, atom_2_from_pair_B)]
+    :min_frame: Starting frame for the analysis
+    :max_frame: Ending frame for the analysis
     """
 
     group_1_ids = []
@@ -197,14 +204,16 @@ def compute_atom_distance(u, atoms_ids_listoftuples, max_st):
     atom_1_group = u.atoms[group_1_ids]
     atom_2_group = u.atoms[group_2_ids]
 
+    first_frame = min_frame
+    last_frame = max_frame or len(u.trajectory)
+
     dist_data = []
-    for ts in u.trajectory:
+    for ts in u.trajectory[first_frame:last_frame]:
         frame = ts.frame
         atom_distance = calc_bonds(atom_1_group.positions, atom_2_group.positions, box=u.dimensions)
         atom_distance_list = [float(atom_distance[i]) for i in range(len(atom_distance))]
         dist_data.append([frame, u.trajectory.time] + atom_distance_list)
-        if frame == max_st:
-            break
+
     u.trajectory[0]
     dist_df = pd.DataFrame(dist_data, columns = ["Frame", "Time"] + column_names)
 
@@ -213,15 +222,47 @@ def compute_atom_distance(u, atoms_ids_listoftuples, max_st):
     return "Atom distances successfully generated. \n"
 
 
+def analyse_rgyr(u, full_dict, complex_id, ligand_names, min_frame = 0, max_frame = None):
+    """
+    Calculates the radius of giration for all ligands present in ligand names.
+    
+    :param u: Universe
+    :param full_dict: Dictionary including all atom indexes in the universe
+    :param complex_id: Identifier for the complex
+    :param ligand_names: List containing the names of all ligands to be analysed
+    :min_frame: Starting frame for the analysis
+    :max_frame: Ending frame for the analysis
+    """
+    u.trajectory[0].frame
+    first_frame = min_frame
+    last_frame = max_frame or len(u.trajectory)
+
+    for ligand in ligand_names:
+        
+        ligand_atom_ids = full_dict[complex_id]["ligands"][ligand]  
+        ligand_atom_list = u.atoms[ligand_atom_ids] 
+
+        rgyr_data = []
+        for ts in u.trajectory[first_frame:last_frame]:
+            frame = ts.frame
+            rgyr_data.append((frame, u.trajectory.time, ligand_atom_list.radius_of_gyration()))
+        
+        u.trajectory[0]
+        rgyr_df = pd.DataFrame(rgyr_data, columns = ["Frame", "Time", "Rgyr"])
+        
+        export_name = f"Rgyr_{ligand}_complex_{complex_id}"        
+        export_csv_plot(export_name, rgyr_df,labels = ["Frames", "Distance (Å)"], ind_start=2)
+        return "Radius of gyration analysis sucessfully generated. \n"
+
 
 def export_csv_plot(file_export_name, df, labels = None, ind_start = 3):
     """
     Exports a pandas dataframe as a .csv and a .png (image) files.
     
-    :param file_export_name: export name for the .csv and .png files
-    :param df: dataframe to be converted
-    :param df: list containing optional x and y labels
-    :param ind_start: optional input for starting index for y axis values, retrieved \
+    :param file_export_name: Export name for the .csv and .png files
+    :param df: Dataframe used for data conversion
+    :param df: List containing optional x and y labels
+    :param ind_start: Optional input for starting index for y axis values, retrieved \
     from the dataframe colnames 
     """
     colnames = list(df)
@@ -243,12 +284,13 @@ def ids_to_key(list):
         out += f"{item} "
     return f"index {out.strip()}"
 
+
 def complex_to_ids(full_dict, complex_id):
     """
-    Docstring for complex_to_keys
+    Outputs all atoms that belong to the inputed complex_id, from full_dict
     
-    :param full_dict: Description
-    :param complex_id: Description
+    :param full_dict: Dictionary including all atom indexes in the universe
+    :param complex_id: Identifier for the complex
     """
     ids_list= []
     chosen_complex = full_dict[f"{complex_id}"]
@@ -267,8 +309,9 @@ def get_complex_data(u, full_dict, complex_id):
     outputs the atomids of the complex, the atom_group and the separate keys for all the groups in \
     the complex.
     
-    :param full_dict: Description
-    :param complex_id: Description
+    :param u: 
+    :param full_dict: Dictionary including all atom indexes in the universe
+    :param complex_id: Identifier for the complex
     """
     complex_groups_atomids = complex_to_ids(full_dict, complex_id)
 
@@ -288,9 +331,12 @@ def get_complex_data(u, full_dict, complex_id):
 
 
 def main():
+
     # defines what functions must only run once per command
     RUN_ONCE = ["Distance between atoms"]
-    list(set(FUNCTIONS))
+
+    global FUNCTIONS
+    FUNCTIONS = list(dict.fromkeys(FUNCTIONS))
 
 
     #create universe
@@ -309,27 +355,24 @@ def main():
 
     functions_dict = {"RMSD fitted protein": compute_RMSD_fit_protein ,
                       "RMSD fitted ligands": compute_RMSD_fit_ligand ,
-                      "Distance between atoms": compute_atom_distance
+                      "Distance between atoms": compute_atom_distance,
+                      "Radius of gyration": analyse_rgyr
     }
 
     for function_name in FUNCTIONS:
         for complex_id in list(full_dict.keys()):
             ligand_names = list(full_dict[complex_id]["ligands"].keys())
 
-            inputs_dict = {"RMSD fitted ligands": (U, full_dict, complex_id, ligand_names, LIGAND_FITTING_CRITERIA),
-                           "RMSD fitted protein": (U, full_dict, complex_id, ligand_names, PROTEIN_FITTING_CRITERIA),
-                           "Distance between atoms": (U, ATOM_PAIRS, STOP_TIME)
+            inputs_dict = {"RMSD fitted ligands": (U, full_dict, complex_id, ligand_names, LIGAND_FITTING_CRITERIA, START_FRAME, STOP_FRAME),
+                           "RMSD fitted protein": (U, full_dict, complex_id, ligand_names, PROTEIN_FITTING_CRITERIA, START_FRAME, STOP_FRAME),
+                           "Distance between atoms": (U, ATOM_PAIRS, START_FRAME, STOP_FRAME),
+                           "Radius of gyration": (U, full_dict, complex_id, ligand_names, START_FRAME, STOP_FRAME)
             }
             current_function = functions_dict[function_name]
             current_input = inputs_dict[function_name]
             current_function(*current_input)
             if function_name in RUN_ONCE:
                 break
-
-
-    
-    
-    
 
 
 if __name__ == "__main__":
