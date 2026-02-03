@@ -26,16 +26,17 @@ ATOM_PAIRS = [(49,50), (70,71)]#[(11153, 11267), (11203, 11297)]
 
 
 #write the functions you want to use
-FUNCTIONS = ["RMSD fitted protein", "RMSD fitted ligands"]#, "Radius of gyration", "RMSD fitted protein", "RMSD fitted ligands","Distance between atoms"]
-"""
+FUNCTIONS = ["Distance between atoms"] # "RMSD fitted protein", "RMSD fitted ligands","Distance between atoms", "Radius of gyration"]
+
+""" 
 Choose functions from function selection pool.
 Functions are applied from left to right function options:
 
-RMSD fitted ligands - calculates the RMSD over all frames for each inputed ligand,
-fitted for each ligand
-
 RMSD fitted protein - calculates the RMSD over all frames for the protein and 
 the ligands, fitted for the inputted protein backbone
+
+RMSD fitted ligands - calculates the RMSD over all frames for each inputed ligand,
+fitted for each ligand
 
 Distance between atoms - calculates the distance between 2 atoms over all frames
 -> for more that an atom pair, input as a list of tuples: [(A1, A2), (A3, A4)]
@@ -218,10 +219,10 @@ def compute_atom_distance(u, atoms_ids_listoftuples, min_frame = 0, max_frame = 
             dist_data.append([frame, u.trajectory.time, float(atom_distance)])
 
             
-            dist_df = pd.DataFrame(dist_data, columns = ["Frame", "Time", f"atoms {pair[0]} / {pair[1]}"])
+        dist_df = pd.DataFrame(dist_data, columns = ["Frame", "Time", f"atoms {pair[0]} / {pair[1]}"])
 
-            export_name = f"atom_pair_{pair[0]}_{pair[1]}_distances"
-            export_csv_plot(export_name, dist_df, labels = ["Frames", "Distance (Å)"], ind_start= 2, ylim = ylim)
+        export_name = f"atom_pair_{pair[0]}_{pair[1]}_distances"
+        export_csv_plot(export_name, dist_df, labels = ["Frames", "Distance (Å)"], ind_start= 2, ylim = ylim)
         u.trajectory[0]
         
     return "Atom distances successfully generated. \n"
