@@ -8,11 +8,11 @@ from matplotlib import pyplot as plt
 #start and stop frames for the analysis functions
 #for default values substitute with None
 START_FRAME = None
-STOP_FRAME = None
+STOP_FRAME = 20
 
-# the protein key is used to select residues in all monomers
+# the protein key is used to select mobile residues in all monomers
 # the protein is parsed into different monomers automatically
-PROTEIN_KEY = "resid 1-50"
+MOBILE_RESIDUES_KEY = "resid 1-30"
 PROTEIN_FITTING_CRITERIA = "name CA"
 
 # if more ligands are needed, add them using the referred notation
@@ -22,12 +22,11 @@ LIGAND_FITTING_CRITERIA = "all" # "not name H*" to exclude ligand hydrogens
 
 #atom pair indices
 #for atom distance analysis
-ATOM_PAIRS = [(49, 50), (99, 100), (101, 103)]
+ATOM_PAIRS = [(49,50), (70,71)]#[(11153, 11267), (11203, 11297)]
 
 
 #write the functions you want to use
-FUNCTIONS = ["Distance between atoms", "Radius of gyration", "RMSD fitted protein", "RMSD fitted ligands"]
-
+FUNCTIONS = ["RMSD fitted protein", "RMSD fitted ligands"]#, "Radius of gyration", "RMSD fitted protein", "RMSD fitted ligands","Distance between atoms"]
 """
 Choose functions from function selection pool.
 Functions are applied from left to right function options:
@@ -117,7 +116,7 @@ def add_ligands_to_complexes(u, complexes_dict, ligand_key_list):
     return final_dict
 
 
-def compute_RMSD_fit_protein(u, full_dict, complex_id, ligand_names, protein_fc, min_frame = 0, max_frame = None):
+def compute_RMSD_fit_protein(u, full_dict, complex_id, ligand_names, protein_fc, min_frame = 0, max_frame = None, ylim = None):
     """
     Computes the RMSD of a inputed complex with fitting on the complex protein_chain, from a universe and a dictionary of all atoms in the system
  
@@ -131,21 +130,30 @@ def compute_RMSD_fit_protein(u, full_dict, complex_id, ligand_names, protein_fc,
     """
     first_frame = min_frame
     final_frame = max_frame or len(u.trajectory)
-    
-    complex_atom_group, complex_keys_list = get_complex_data(u, full_dict, complex_id)
 
-    r = rms.RMSD(complex_atom_group, complex_atom_group, select = protein_fc, groupselections = complex_keys_list)
+    complete_protein_dict = parse_protein(u.select_atoms("protein"))
+    complete_protein_indices = complete_protein_dict[complex_id]["protein_chain"]
+    complete_protein_group = u.atoms[complete_protein_indices]
+
+    complex_atom_group, complex_keys_list = get_complex_data(u, full_dict, complex_id)
+    complex_protein_indices = full_dict[complex_id]["protein_chain"]
+
+    static_atom_indices = list(set(complete_protein_indices) - set(complex_protein_indices))
+    full_protein_and_ligands_atom_group = complete_protein_group.concatenate(complex_atom_group)
+    static_protein_keys = ids_to_key(static_atom_indices)
+
+    r = rms.RMSD(full_protein_and_ligands_atom_group, full_protein_and_ligands_atom_group, select = static_protein_keys, groupselections = complex_keys_list)
     r.run(start = first_frame, stop = final_frame)
 
     run_df = pd.DataFrame(r.results.rmsd, columns = ["Frame", "Time(ns)", "Backbone (discarded)", protein_fc] +  ligand_names)
     
     export_name = f"RMSD_Protein_complex_{complex_id}_fitted_plus_{'_'.join(ligand_names)}"
-    export_csv_plot(export_name, run_df, labels = ["Frames", "Distance (Å)"])
+    export_csv_plot(export_name, run_df, labels = ["Frames", "Distance (Å)"], ylim = ylim)
 
     return "Protein fitted RMSD successfuly generated. \n"
 
 
-def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names, ligand_fc, min_frame = 0, max_frame = None):
+def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names, ligand_fc, min_frame = 0, max_frame = None,  ylim = None):
     """
     Computes the RMSD of a inputed complex with fitting on the ligand, from a universe and a dictionary of all atoms in the system
     
@@ -157,6 +165,7 @@ def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names, ligand_fc, m
     :param ligand_fc: The ligand fitting criteria used to calculate RMSD values
     :min_frame: Starting frame for the analysis
     :max_frame: Ending frame for the analysis
+    :param ylim: y axis limits for the exported plot
     """
 
     first_frame = min_frame
@@ -171,19 +180,20 @@ def compute_RMSD_fit_ligand(u, full_dict, complex_id, ligand_names, ligand_fc, m
             continue
 
         ligand_atom_group = u.atoms[ligand_atom_ids]
-        r = rms.RMSD(ligand_atom_group, ligand_atom_group, select = ligand_fc)
+        #superposition equal to False assuming the protein is already fitted in the trajectory
+        r = rms.RMSD(ligand_atom_group, ligand_atom_group, select = ligand_fc, superposition = False)
         r.run(start = first_frame, stop = final_frame)
       
         run_df = pd.DataFrame(r.results.rmsd, columns = ["Frame", "Time(ns)"] +  [ligand])
         
         export_name = f"RMSD_{ligand}_complex_{complex_id}_fitted"
         print(run_df, "\n")
-        export_csv_plot(export_name, run_df, labels = ["Frames", "Distance (Å)"])
+        export_csv_plot(export_name, run_df, labels = ["Frames", "Distance (Å)"], ind_start = 2, ylim= ylim)
 
     return "Ligand fitted RMSD successfuly generated. \n"
 
 
-def compute_atom_distance(u, atoms_ids_listoftuples, min_frame = 0, max_frame = None):
+def compute_atom_distance(u, atoms_ids_listoftuples, min_frame = 0, max_frame = None, ylim = None):
     """
     Calculates and plots the difference between atom pairs. Accepts the a list of tuples as input for the atom pairs and \
     can calculate the distance for however many atom pairs are included.  
@@ -192,37 +202,32 @@ def compute_atom_distance(u, atoms_ids_listoftuples, min_frame = 0, max_frame = 
     :param atoms_ids_listoftuples: List of tuples containing the atom pairs. Ex: [(atom_1_from_pair_A, atom_2_from_pair_A), (atom_1_from_pair_B, atom_2_from_pair_B)]
     :min_frame: Starting frame for the analysis
     :max_frame: Ending frame for the analysis
+    :param ylim: y axis limits for the exported plot
     """
-
-    group_1_ids = []
-    group_2_ids = []
-    column_names = []
-    for pair in atoms_ids_listoftuples:
-        group_1_ids.append(pair[0]-1)
-        group_2_ids.append(pair[1]-1)
-        column_names.append(f"{pair[0]} / {pair[1]}")
-    atom_1_group = u.atoms[group_1_ids]
-    atom_2_group = u.atoms[group_2_ids]
-
     first_frame = min_frame
     last_frame = max_frame or len(u.trajectory)
 
-    dist_data = []
-    for ts in u.trajectory[first_frame:last_frame]:
-        frame = ts.frame
-        atom_distance = calc_bonds(atom_1_group.positions, atom_2_group.positions, box=u.dimensions)
-        atom_distance_list = [float(atom_distance[i]) for i in range(len(atom_distance))]
-        dist_data.append([frame, u.trajectory.time] + atom_distance_list)
+    for pair in atoms_ids_listoftuples:
+        atom_1_group = u.atoms[pair[0]-1]
+        atom_2_group = u.atoms[pair[1]-1]
 
-    u.trajectory[0]
-    dist_df = pd.DataFrame(dist_data, columns = ["Frame", "Time"] + column_names)
+        dist_data = []
+        for ts in u.trajectory[first_frame:last_frame]:
+            frame = ts.frame
+            atom_distance = calc_bonds(atom_1_group.position, atom_2_group.position, box=u.dimensions)
+            dist_data.append([frame, u.trajectory.time, float(atom_distance)])
 
-    export_name = "atom_pair_distances"
-    export_csv_plot(export_name, dist_df, labels = ["Frames", "Distance (Å)"], ind_start= 2)
+            
+            dist_df = pd.DataFrame(dist_data, columns = ["Frame", "Time", f"atoms {pair[0]} / {pair[1]}"])
+
+            export_name = f"atom_pair_{pair[0]}_{pair[1]}_distances"
+            export_csv_plot(export_name, dist_df, labels = ["Frames", "Distance (Å)"], ind_start= 2, ylim = ylim)
+        u.trajectory[0]
+        
     return "Atom distances successfully generated. \n"
 
 
-def analyse_rgyr(u, full_dict, complex_id, ligand_names, min_frame = 0, max_frame = None):
+def analyse_rgyr(u, full_dict, complex_id, ligand_names, min_frame = 0, max_frame = None, ylim = None):
     """
     Calculates the radius of giration for all ligands present in ligand names.
     
@@ -232,6 +237,7 @@ def analyse_rgyr(u, full_dict, complex_id, ligand_names, min_frame = 0, max_fram
     :param ligand_names: List containing the names of all ligands to be analysed
     :min_frame: Starting frame for the analysis
     :max_frame: Ending frame for the analysis
+    :param ylim: y axis limits for the exported plot
     """
     u.trajectory[0].frame
     first_frame = min_frame
@@ -251,11 +257,11 @@ def analyse_rgyr(u, full_dict, complex_id, ligand_names, min_frame = 0, max_fram
         rgyr_df = pd.DataFrame(rgyr_data, columns = ["Frame", "Time", "Rgyr"])
         
         export_name = f"Rgyr_{ligand}_complex_{complex_id}"        
-        export_csv_plot(export_name, rgyr_df,labels = ["Frames", "Distance (Å)"], ind_start=2)
+        export_csv_plot(export_name, rgyr_df,labels = ["Frames", "Distance (Å)"], ind_start=2, ylim = ylim )
     return "Radius of gyration analysis sucessfully generated. \n"
 
 
-def export_csv_plot(file_export_name, df, labels = None, ind_start = 3):
+def export_csv_plot(file_export_name, df, labels = None, ind_start = 3, ylim = None):
     """
     Exports a pandas dataframe as a .csv and a .png (image) files.
     
@@ -264,6 +270,7 @@ def export_csv_plot(file_export_name, df, labels = None, ind_start = 3):
     :param df: List containing optional x and y labels
     :param ind_start: Optional input for starting index for y axis values, retrieved \
     from the dataframe colnames 
+    :param ylim: y axis limits for the exported plot
     """
     colnames = list(df)
     x_axis = colnames[0]
@@ -274,6 +281,8 @@ def export_csv_plot(file_export_name, df, labels = None, ind_start = 3):
     if labels is not None:
         plt.xlabel(labels[0])
         plt.ylabel(labels[1])
+    if ylim is not None:
+        plt.ylim(*ylim)
     plt.savefig(f"{file_export_name}.png", dpi = 300)
     plt.close()
 
@@ -334,6 +343,11 @@ def main():
 
     # defines what functions must only run once per command
     RUN_ONCE = ["Distance between atoms"]
+    PROTEIN_Y_LIM = [0,15]
+    LIGAND_Y_LIM = [0,12]
+    DISTANCE_YLIM = None
+    RGYR_YLIM = None
+    
 
     global FUNCTIONS
     FUNCTIONS = list(dict.fromkeys(FUNCTIONS))
@@ -343,7 +357,7 @@ def main():
     U = mda.Universe(sys.argv[1],sys.argv[2])
        
     #select the mobile domain of the protein specifically
-    protein_full = U.select_atoms(PROTEIN_KEY)
+    protein_full = U.select_atoms(MOBILE_RESIDUES_KEY)
     #analyse the radius of gyration
     protein_dict = parse_protein(protein_full)
     #select the ligands specifically
@@ -362,11 +376,10 @@ def main():
     for function_name in FUNCTIONS:
         for complex_id in list(full_dict.keys()):
             ligand_names = list(full_dict[complex_id]["ligands"].keys())
-
-            inputs_dict = {"RMSD fitted ligands": (U, full_dict, complex_id, ligand_names, LIGAND_FITTING_CRITERIA, START_FRAME, STOP_FRAME),
-                           "RMSD fitted protein": (U, full_dict, complex_id, ligand_names, PROTEIN_FITTING_CRITERIA, START_FRAME, STOP_FRAME),
-                           "Distance between atoms": (U, ATOM_PAIRS, START_FRAME, STOP_FRAME),
-                           "Radius of gyration": (U, full_dict, complex_id, ligand_names, START_FRAME, STOP_FRAME)
+            inputs_dict = {"RMSD fitted protein": (U, full_dict, complex_id, ligand_names, PROTEIN_FITTING_CRITERIA, START_FRAME, STOP_FRAME, PROTEIN_Y_LIM),
+                           "RMSD fitted ligands": (U, full_dict, complex_id, ligand_names, LIGAND_FITTING_CRITERIA, START_FRAME, STOP_FRAME, LIGAND_Y_LIM),
+                           "Distance between atoms": (U, ATOM_PAIRS, START_FRAME, STOP_FRAME, DISTANCE_YLIM),
+                           "Radius of gyration": (U, full_dict, complex_id, ligand_names, START_FRAME, STOP_FRAME, RGYR_YLIM)
             }
             current_function = functions_dict[function_name]
             current_input = inputs_dict[function_name]
